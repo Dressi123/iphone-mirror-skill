@@ -1,0 +1,7 @@
+#!/bin/zsh
+# Entry point: rebuilds the binary when iphone.swift is newer, then runs it.
+DIR="${0:A:h}"
+if [[ ! -x "$DIR/bin/iphone-core" || "$DIR/iphone.swift" -nt "$DIR/bin/iphone-core" ]]; then
+  "$DIR/build.sh" >&2 || exit 1
+fi
+exec "$DIR/bin/iphone-core" "$@"
