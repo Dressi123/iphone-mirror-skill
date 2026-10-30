@@ -77,11 +77,12 @@ It stops at the first failing step and names it. Lines are split like a shell, `
   tap the icon: `tap-text Settings --offset 0 -25`.
 - **Rows behind a floating bar.** Text OCR can read under a bottom search or tab bar is
   not tappable there. Scroll it up first.
-- **No back swipe.** Edge swipes, content swipes and sideways wheel all fail to reach the
-  back gesture through Mirroring; `back` taps the button.
-- **No pinch.** Mirroring has no way in for a two-finger gesture, and the one-finger
-  double-tap-hold-slide zoom doesn't come through either. `double-tap` does zoom a map in,
-  one step per call.
+- **No back swipe, no pinch.** Both work from a real trackpad but cannot be synthesized.
+  A recording of real two-finger-back and pinch gestures, replayed event for event (scroll,
+  gesture and click events, original timing), moved nothing: Mirroring takes these from
+  the trackpad itself, not from the event stream, so posted events never reach them.
+  Hand-built phased scrolls and magnify events fail the same way. `back` taps the button,
+  and `double-tap` zooms a map in; there is no way to zoom out.
 - **Swipes that start on a widget** go to the widget, not the page under it.
 - **`tap-text` matches any text**, a heading included: on a page titled "General", the
   title matches before anything else does. Use `--region` or `--nth` when it's ambiguous.
