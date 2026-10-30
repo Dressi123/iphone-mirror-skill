@@ -80,13 +80,15 @@ It stops at the first failing step and names it. Lines are split like a shell, `
 - **No back swipe.** Edge swipes, content swipes and sideways wheel all fail to reach the
   back gesture through Mirroring; `back` taps the button.
 - **No pinch.** Mirroring has no way in for a two-finger gesture, and the one-finger
-  double-tap-hold-slide zoom doesn't come through either. `double-tap` is untested on a map.
+  double-tap-hold-slide zoom doesn't come through either. `double-tap` does zoom a map in,
+  one step per call.
 - **Swipes that start on a widget** go to the widget, not the page under it.
 - **`tap-text` matches any text**, a heading included: on a page titled "General", the
   title matches before anything else does. Use `--region` or `--nth` when it's ambiguous.
 - **`record` captures the window's screen region**, so it must stay uncovered: start it
   in the background and drive with `run`, which keeps Mirroring in front. Pull frames
-  with `ffmpeg -i rec.mov -vf fps=10 frame-%03d.png`.
+  with `ffmpeg -i rec.mov -vf fps=10 frame-%03d.png`. The top edge of the video can catch
+  a sliver of whatever is just above the window, the Mac's menu bar included.
 
 ## Dev builds on the device
 
