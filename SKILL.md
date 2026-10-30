@@ -79,7 +79,7 @@ It stops at the first failing step and names it. Lines are split like a shell, `
   not tappable there. Scroll it up first.
 - **No back swipe, no pinch.** Both work from a real trackpad but cannot be synthesized.
   A recording of real two-finger-back and pinch gestures, replayed event for event (scroll,
-  gesture and click events, original timing), moved nothing: Mirroring takes these from
+  gesture and click events, original timing), moved nothing. The likely reason: Mirroring reads these from
   the trackpad itself, not from the event stream, so posted events never reach them.
   Hand-built phased scrolls and magnify events fail the same way. `back` taps the button,
   and `double-tap` zooms a map in; there is no way to zoom out.
