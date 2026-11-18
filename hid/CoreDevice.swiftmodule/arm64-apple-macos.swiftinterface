@@ -1,0 +1,65 @@
+// swift-interface-format-version: 1.0
+// swift-module-flags: -target arm64-apple-macos15.0 -enable-library-evolution -module-name CoreDevice
+// A hand-written slice of Xcode's private CoreDevice framework: only what drives the
+// remote digitizer. Names must mangle to the framework's exported symbols exactly.
+import Foundation
+import CoreGraphics
+
+public protocol DeviceCapabilityProtocol {
+}
+
+public protocol DeviceCapability {
+  associatedtype ProtocolType
+  associatedtype ImplType
+}
+
+public struct CapabilityStaticMember<A> {
+  public init()
+}
+
+public struct DigitizerHIDCapability : CoreDevice.DeviceCapability {
+  public typealias ProtocolType = Any
+  public typealias ImplType = Any
+}
+
+public struct DigitizerPoint {
+  public init(x: Swift.Double, y: Swift.Double)
+}
+
+public enum DigitizerEventType {
+  case start
+  case position
+  case end
+}
+
+public enum DigitizerEdge {
+  case none
+  case left
+  case right
+  case top
+  case bottom
+}
+
+public enum DigitizerTarget {
+  case mainScreen
+  case display1
+}
+
+public protocol HIDDigitizer : CoreDevice.DeviceCapabilityProtocol {
+  func send(pointOne: CoreDevice.DigitizerPoint, pointTwo: CoreDevice.DigitizerPoint?, eventType: CoreDevice.DigitizerEventType, edge: CoreDevice.DigitizerEdge, target: CoreDevice.DigitizerTarget) throws
+  func sendBarrier()
+}
+
+extension CoreDevice.HIDDigitizer {
+  public func send(pointOne: CoreGraphics.CGPoint, pointTwo: CoreGraphics.CGPoint?, eventType: CoreDevice.DigitizerEventType, edge: CoreDevice.DigitizerEdge, target: CoreDevice.DigitizerTarget) throws
+}
+
+public class RemoteDevice {
+  public var deviceIdentifier: Foundation.UUID { get }
+  public func getImplementation<A>(for: CoreDevice.CapabilityStaticMember<A>) async throws -> A.ProtocolType where A : CoreDevice.DeviceCapability
+}
+
+public class DeviceManager {
+  public static var shared: CoreDevice.DeviceManager { get }
+  final public func allDevices() -> [CoreDevice.RemoteDevice]
+}
