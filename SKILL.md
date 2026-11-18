@@ -26,6 +26,35 @@ app under test.
   screen shows something unrelated (mail, messages, notifications), stop and say so
   rather than read it.
 
+## Device Hub instead of Mirroring
+
+Xcode's Device Hub (`DeviceHub.app`, inside Xcode) shows a connected iPhone's screen, or a
+simulator's, in a window that takes clicks as touches. `IPHONE_APP=devicehub` points every
+window command at it. Unlike Mirroring, the phone stays usable in your hand while Device Hub
+shows it, so `state` is not a guard: **check that the user isn't using the phone before you
+drive it.** `home` presses Device Hub's own Home button through Accessibility; `switcher`
+and `spotlight` have no Device Hub equivalent.
+
+## Commands on the device itself
+
+These go through Xcode's `devicectl`, to the device rather than a window, so they work
+with any window or none, and on a booted simulator too. The device is `IPHONE_DEVICE` if
+set, else the first connected physical iPhone, else a booted simulator.
+
+```
+iphone screenshot PATH.png               # native resolution; pixels are device pixels, not tap points
+iphone screen-record PATH.mp4 [--seconds 10]
+iphone appearance                        # print light/dark, text size, reduce motion, ...
+iphone appearance dark                   # or light; plus any `devicectl device settings appearance` flag:
+iphone appearance --text-size axxxl --larger-accessibility-sizes on
+iphone orientation [get | portrait | landscapeLeft | landscapeRight | left | right]
+iphone location 55.676 12.568 | clear
+iphone device info displays              # any `devicectl device` subcommand, on this device
+```
+
+Settings changed here are the phone's own: put them back when done (`appearance` bare
+shows what they were).
+
 ## Commands
 
 All coordinates are **window points**. `iphone shot` saves at exactly that size, so a
@@ -77,7 +106,7 @@ It stops at the first failing step and names it. Lines are split like a shell, `
   tap the icon: `tap-text Settings --offset 0 -25`.
 - **Rows behind a floating bar.** Text OCR can read under a bottom search or tab bar is
   not tappable there. Scroll it up first.
-- **No back swipe, no pinch.** Both work from a real trackpad but cannot be synthesized.
+- **No back swipe, no pinch.** (Through Mirroring; Device Hub may differ.) Both work from a real trackpad but cannot be synthesized.
   A recording of real two-finger-back and pinch gestures, replayed event for event (scroll,
   gesture and click events, original timing), moved nothing. The likely reason: Mirroring reads these from
   the trackpad itself, not from the event stream, so posted events never reach them.

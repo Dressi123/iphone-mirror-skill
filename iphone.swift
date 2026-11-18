@@ -21,20 +21,45 @@ struct MirrorWindow {
     let frame: CGRect   // global screen points, top-left origin (same space as CGEvent)
 }
 
-let bundleID = "com.apple.ScreenContinuity"
+/// iPhone Mirroring, or another app whose window shows a phone: `IPHONE_APP=devicehub`
+/// drives Xcode's Device Hub (a real iPhone or a simulator), `IPHONE_APP=simulator` the
+/// iOS Simulator app, and any bundle id names an app directly.
+let bundleID: String = {
+    switch ProcessInfo.processInfo.environment["IPHONE_APP"] {
+    case "simulator"?: return "com.apple.iphonesimulator"
+    case "devicehub"?: return deviceHubID
+    case let id? where id.contains("."): return id
+    default: return "com.apple.ScreenContinuity"
+    }
+}()
+
+let deviceHubID = "com.apple.dt.Devices"
+var isDeviceHub: Bool { bundleID == deviceHubID }
 
 func mirrorApp() -> NSRunningApplication? {
     NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
 }
 
+/// The app's process. Xcode's Device Hub reports pid -1 through NSRunningApplication (the
+/// same stale object comes back for its real pid too), so its windows' owner pid is used.
+func mirrorPID() -> pid_t? {
+    guard let app = mirrorApp() else { return nil }
+    if app.processIdentifier > 0 { return app.processIdentifier }
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    return list.lazy.compactMap { info -> pid_t? in
+        guard (info[kCGWindowOwnerName as String] as? String) == app.localizedName else { return nil }
+        return info[kCGWindowOwnerPID as String] as? pid_t
+    }.first
+}
+
 func findWindow() -> MirrorWindow? {
-    guard let app = mirrorApp(),
+    guard let pid = mirrorPID(),
           let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
     else { return nil }
     // The phone window is the on-screen layer-0 window. The app also keeps an off-screen
     // "Welcome" window and menu-bar-sized strips around, so on-screen and taller than wide.
     let candidates = list.compactMap { info -> MirrorWindow? in
-        guard (info[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier,
+        guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
               (info[kCGWindowLayer as String] as? Int) == 0,
               (info[kCGWindowIsOnscreen as String] as? Bool) == true,
               let bounds = info[kCGWindowBounds as String] as? NSDictionary,
@@ -48,11 +73,15 @@ func findWindow() -> MirrorWindow? {
 }
 
 func requireWindow() -> MirrorWindow {
-    if mirrorApp() == nil {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/iPhone Mirroring.app"))
+    if mirrorApp() == nil, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+        NSWorkspace.shared.open(url)
         for _ in 0..<20 where findWindow() == nil { usleep(250_000) }
     }
-    guard let window = findWindow() else { fail("iPhone Mirroring window not found. Open iPhone Mirroring and connect.") }
+    guard let window = findWindow() else {
+        fail(isDeviceHub
+             ? "Device Hub has no phone window. Open the device's screen in Device Hub (Xcode > Window > Devices)."
+             : "iPhone Mirroring window not found. Open iPhone Mirroring and connect.")
+    }
     return window
 }
 
@@ -478,6 +507,96 @@ func type(_ text: String) {
     }
 }
 
+// MARK: - Device (devicectl)
+
+// What Xcode's `devicectl` does to the device itself, with no window involved: a screenshot
+// at the device's own resolution, the appearance and accessibility settings, orientation and
+// a simulated location. Works whichever app shows the screen, or none.
+
+/// Runs `xcrun devicectl ARGS`, with Xcode as the developer dir when none is set, since
+/// `xcode-select` often points at the Command Line Tools, which have no devicectl.
+@discardableResult
+func devicectl(_ arguments: [String], quiet: Bool = false) -> (status: Int32, output: String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    process.arguments = ["devicectl"] + arguments
+    var environment = ProcessInfo.processInfo.environment
+    if environment["DEVELOPER_DIR"] == nil, FileManager.default.fileExists(atPath: "/Applications/Xcode.app") {
+        environment["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
+    }
+    process.environment = environment
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do { try process.run() } catch { fail("could not run xcrun devicectl: \(error.localizedDescription)") }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    let output = String(decoding: data, as: UTF8.self)
+    if !quiet, process.terminationStatus != 0 {
+        fail("devicectl failed:\n" + output.split(separator: "\n").filter { $0.contains("rror") }.joined(separator: "\n"))
+    }
+    return (process.terminationStatus, output)
+}
+
+/// The device to act on: `IPHONE_DEVICE` (any identifier devicectl takes), else the first
+/// connected physical iPhone, else a booted simulator.
+let deviceID: String = {
+    if let id = ProcessInfo.processInfo.environment["IPHONE_DEVICE"], !id.isEmpty { return id }
+    let json = NSTemporaryDirectory() + "iphone-devices-\(getpid()).json"
+    defer { try? FileManager.default.removeItem(atPath: json) }
+    devicectl(["list", "devices", "--quiet", "--json-output", json])
+    guard let data = FileManager.default.contents(atPath: json),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let devices = (root["result"] as? [String: Any])?["devices"] as? [[String: Any]]
+    else { fail("could not read devicectl's device list") }
+    func field(_ device: [String: Any], _ group: String, _ key: String) -> String? {
+        (device[group] as? [String: Any])?[key] as? String
+    }
+    let phones = devices.filter {
+        field($0, "hardwareProperties", "platform") == "iOS" && field($0, "connectionProperties", "tunnelState") == "connected"
+    }
+    let pick = phones.first { field($0, "hardwareProperties", "reality") == "physical" } ?? phones.first
+    guard let pick, let id = field(pick, "hardwareProperties", "udid") ?? pick["identifier"] as? String else {
+        fail("no connected iPhone. Unlock it and check `xcrun devicectl list devices`, or set IPHONE_DEVICE.")
+    }
+    return id
+}()
+
+/// `devicectl device SUBCOMMAND... --device ID EXTRA...`, printing what it says.
+func deviceCommand(_ subcommand: [String], _ extra: [String] = [], echo: Bool = true) {
+    let result = devicectl(["device"] + subcommand + ["--device", deviceID] + extra)
+    if echo {
+        let lines = result.output.split(separator: "\n", omittingEmptySubsequences: false)
+        print(lines.drop { $0.hasPrefix("Acquired") || $0.hasPrefix("Enabling") || $0.isEmpty }.joined(separator: "\n"), terminator: "")
+    }
+}
+
+/// Presses one of Device Hub's own window buttons (Home, Screenshot, Rotate Left) through
+/// Accessibility: no pointer, no focus change.
+func pressDeviceHubButton(_ name: String) -> Bool {
+    guard let pid = mirrorPID() else { return false }
+    func search(_ element: AXUIElement, depth: Int) -> AXUIElement? {
+        guard depth < 6 else { return nil }
+        var role: CFTypeRef?, description: CFTypeRef?, children: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &description)
+        if role as? String == kAXButtonRole, description as? String == name { return element }
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+        for child in (children as? [AXUIElement]) ?? [] {
+            if let found = search(child, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+    var windows: CFTypeRef?
+    AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &windows)
+    for window in (windows as? [AXUIElement]) ?? [] {
+        if let button = search(window, depth: 0) {
+            return AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
+        }
+    }
+    return false
+}
+
 // MARK: - Helpers
 
 func run(_ path: String, _ arguments: [String]) {
@@ -624,6 +743,16 @@ usage: iphone <command>   (coordinates are window points; a shot's pixels are po
                                  left right up down, or a single character
   home | switcher | spotlight    Cmd-1 / Cmd-2 / Cmd-3
   record PATH [--seconds S]      record the window to a .mov (default 10 s, clicks shown)
+  screenshot PATH.png            the device's own screenshot, at its native resolution (devicectl;
+                                 no window needed, but pixels are device pixels, not tap points)
+  screen-record PATH.mp4 [--seconds S]   the device's own recording (default 10 s)
+  appearance [light|dark] [--text-size xl|axxxl|...] [--reduce-motion on|off] ...
+                                 bare: print the current settings; otherwise any flag of
+                                 `devicectl device settings appearance`
+  orientation [get|portrait|landscapeLeft|landscapeRight|left|right]
+                                 set or rotate the device's orientation
+  location LAT LON | clear       simulate where the device is
+  device SUBCOMMAND... [ARGS]    any `devicectl device` subcommand, on this device
   run                            read commands from stdin, one per line, holding focus
                                  for the whole script; stops at the first failure
 Any action also takes --wait (default: until the screen has changed and settled, warning
@@ -819,6 +948,11 @@ func execute(_ command: String, _ arguments: [String]) {
         withMirrorFocused { press(code, flags: flags) }
         settle?.finish()
 
+    case "home" where isDeviceHub:
+        _ = requireWindow()
+        guard pressDeviceHubButton("Home") else { fail("Device Hub's Home button not found") }
+        settle?.finish()
+
     case "home", "switcher", "spotlight":
         _ = requireWindow()
         let code: CGKeyCode = command == "home" ? 18 : command == "switcher" ? 19 : 20   // 1, 2, 3
@@ -836,6 +970,47 @@ func execute(_ command: String, _ arguments: [String]) {
         run("/usr/sbin/screencapture", ["-x", "-v", "-k", "-V", String(seconds), "-R\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))", path])
         guard FileManager.default.fileExists(atPath: path) else { fail("recording failed") }
         print(path)
+
+    case "screenshot":
+        guard let path = args.first, path.hasSuffix(".png") else { fail("screenshot needs a PATH ending .png") }
+        deviceCommand(["capture", "screenshot"], ["--destination", path], echo: false)
+        print(path)
+
+    case "screen-record":
+        let seconds = option("--seconds", in: &args) ?? "10"
+        guard let path = args.first, path.hasSuffix(".mp4") else { fail("screen-record needs a PATH ending .mp4") }
+        deviceCommand(["capture", "screen-record"], ["--destination", path, "--duration", seconds], echo: false)
+        print(path)
+
+    case "appearance":
+        if args.isEmpty {
+            deviceCommand(["info", "appearance"])
+        } else {
+            if let mode = args.first, ["light", "dark"].contains(mode) { args[0] = "--mode"; args.insert(mode, at: 1) }
+            deviceCommand(["settings", "appearance"], args)
+        }
+
+    case "orientation":
+        switch args.first {
+        case nil, "get"?: deviceCommand(["orientation", "get"])
+        case "left"?, "right"?: deviceCommand(["orientation", "rotate", args[0]])
+        case let value?: deviceCommand(["orientation", "set", value])
+        }
+
+    case "location":
+        if args.first == "clear" {
+            deviceCommand(["simulate", "location", "clear"])
+        } else {
+            guard args.count >= 2 else { fail("location needs LAT LON, or clear") }
+            deviceCommand(["simulate", "location", "coordinate"], ["--latitude", args[0], "--longitude", args[1]])
+        }
+
+    case "device":
+        // devicectl wants --device after the leaf subcommand: the words before the first
+        // option are the subcommand, the rest go after --device.
+        let split = args.firstIndex { $0.hasPrefix("-") } ?? args.endIndex
+        guard split > 0 else { fail("device needs a devicectl subcommand, e.g. `device info displays`") }
+        deviceCommand(Array(args[..<split]), Array(args[split...]))
 
     case "run":
         guard !focusHeld else { fail("run cannot nest") }
