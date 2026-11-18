@@ -1,13 +1,21 @@
 # iphone-mirror-skill
 
 A [Claude Code](https://claude.com/claude-code) skill that lets Claude see and drive your
-**real iPhone** through macOS **iPhone Mirroring**. It reads the screen with OCR, taps by
-label, long presses, swipes, scrolls, types, waits for animations to settle and records
-video.
+**real iPhone**. It reads the screen with OCR, taps by label, long presses, swipes,
+scrolls, pinches, types, waits for animations to settle and records video.
 
-It drives the phone the way you would from the Mirroring window: the Mac's pointer and
-keyboard. Nothing is installed on the phone, and nothing is added to the app you are
-testing, so what Claude exercises is the build your users get.
+Nothing is installed on the phone, and nothing is added to the app you are testing, so
+what Claude exercises is the build your users get. There are three ways in:
+
+| Mode | How it sees | How it touches | Your mouse |
+|---|---|---|---|
+| **iPhone Mirroring** (default) | the Mirroring window | the Mac's pointer and keyboard | taken while it acts |
+| **Device Hub** (`IPHONE_APP=devicehub`) | Xcode's Device Hub window | the Mac's pointer and keyboard | taken while it acts |
+| **Device** (`IPHONE_APP=device`, new, fragile) | the phone's own screenshots | Xcode's private touch service | **never touched** |
+
+Device mode is the new one: Claude drives the phone while you keep using your Mac, and it
+can do what a pointer can't (pinch, the edge back swipe). It relies on a private Apple
+framework, so read [Device mode](#device-mode-no-window-no-pointer) before you rely on it.
 
 ```
 you:     open my app on the phone, add a trip to Lisbon and check the map updates
@@ -54,6 +62,43 @@ Quit and reopen that app afterwards; macOS only applies the change on relaunch.
 The first run compiles the CLI, which takes a few seconds. If `state` prints `in-use`, lock
 the phone. If `text` prints nothing or fails, recheck Screen Recording.
 
+## Device mode: no window, no pointer
+
+```sh
+IPHONE_APP=device ~/.claude/skills/iphone-mirror/iphone state      # → connected
+IPHONE_APP=device ~/.claude/skills/iphone-mirror/iphone text       # → the screen, read off the phone
+IPHONE_APP=device ~/.claude/skills/iphone-mirror/iphone pinch 196 300 40 300   # zoom in, two fingers
+```
+
+It needs **Xcode** (not only the command-line tools) and a phone connected to it: paired,
+unlocked, and listed by `xcrun devicectl list devices`. No Screen Recording or
+Accessibility permission is needed, since nothing on the Mac is captured or clicked.
+
+**How it works.** Xcode's Device Hub shows a connected phone and turns your clicks into
+touches through a service in Xcode's private `CoreDevice` framework, a remote digitizer
+that takes one or two touch points and an edge. The skill calls that service directly from
+a small helper, `bin/iphone-hid`. Screenshots come from `devicectl`, Xcode's supported
+command-line tool for devices.
+
+**Why it's fragile.** `CoreDevice` is private: Apple publishes no interface for it and
+promises nothing about it. The skill carries a hand-written description of the few types it
+needs (`hid/CoreDevice.swiftmodule/`), worked out from the framework's exported symbols on
+Xcode 27 (CoreDevice 642.16). So:
+
+- **Any Xcode update can break it.** The helper rebuilds itself whenever CoreDevice's
+  version changes. If Apple renames or reshapes one of those types, the build fails and
+  device mode stops working until the interface is updated; the window modes are
+  unaffected.
+- **A wrong declaration crashes rather than errors.** If a type changes shape without its
+  name changing, the helper can crash or send a garbled touch.
+- **It is not an Apple-supported way to drive a phone.** It uses the same service Device
+  Hub uses, but nothing guarantees it keeps working, or keeps working the same way.
+- **You can't see what Claude is doing** unless Device Hub is open, and the phone may be in
+  your hand. The skill tells Claude to check the phone is idle first.
+
+It is also slower to look (about 1.5 s per screenshot, so actions settle on a fixed wait),
+and it can't type or record yet: use a window mode for those.
+
 ## Using it
 
 Ask Claude in plain words. It loads the skill when a task involves the phone:
@@ -63,24 +108,28 @@ Ask Claude in plain words. It loads the skill when a task involves the phone:
 - "On the phone, add an item in my app and check the list updates."
 - "Record the sheet opening on the device so we can look at the animation."
 
-While Claude drives, **leave the mouse alone**. Each action brings iPhone Mirroring to the
-front and hands focus back afterwards, and moving the mouse mid-gesture breaks it.
+In the window modes, **leave the mouse alone** while Claude drives. Each action brings the
+window to the front and hands focus back afterwards, and moving the mouse mid-gesture
+breaks it. In device mode you can carry on working.
 
 You can also run the CLI yourself. `iphone` with no arguments lists every command, and
 [SKILL.md](SKILL.md) is the full reference Claude reads.
 
 ## What it can and can't do
 
-| Works | Doesn't |
-|---|---|
-| Tap, long press, double-tap | Pinch, or zooming a map out |
-| Swipe, drag, drag-to-reorder, scroll both ways | The two-finger / edge back swipe (`back` taps the button) |
-| Type and press keys, Home, Spotlight | Multi-finger gestures |
-| OCR, screenshots, coordinate grid, video | Reading text the screen doesn't show |
+| | Mirroring / Device Hub | Device mode |
+|---|---|---|
+| Tap, long press, double-tap, swipe, drag, scroll | yes | yes |
+| Pinch, two fingers | no | yes |
+| Edge back swipe | no (`back` taps the button) | yes |
+| Type and press keys | yes | not yet |
+| OCR, screenshots, coordinate grid | yes | yes |
+| Record video | yes | no |
+| Light/dark, text size, orientation, location (`appearance`, `orientation`, `location`) | yes, through `devicectl` | yes |
 
-Pinch and the back swipe work from a real trackpad, but iPhone Mirroring won't take them
-from software. Even an exact replay of a recorded real gesture does nothing. See
-SKILL.md for the details.
+Pinch and the back swipe work from a real trackpad, but neither window will take them from
+software; even an exact replay of a recorded real gesture does nothing. Device mode gets
+them by skipping the window. See SKILL.md for the details.
 
 **Privacy:** Claude is looking at your personal phone. The skill tells it to stay on task
 and to stop if unrelated messages or notifications show up, but it can see whatever the
