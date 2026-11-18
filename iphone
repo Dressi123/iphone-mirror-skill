@@ -4,4 +4,13 @@ DIR="${0:A:h}"
 if [[ ! -x "$DIR/bin/iphone-core" || "$DIR/iphone.swift" -nt "$DIR/bin/iphone-core" ]]; then
   "$DIR/build.sh" >&2 || exit 1
 fi
+# The touch helper follows its own source and the CoreDevice version it was built against.
+PLIST=/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/Info.plist
+if [[ -f $PLIST ]]; then
+  VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" $PLIST 2>/dev/null)
+  if [[ ! -x "$DIR/bin/iphone-hid" || "$DIR/hid/iphone-hid.swift" -nt "$DIR/bin/iphone-hid" \
+        || "$(cat "$DIR/bin/iphone-hid.version" 2>/dev/null)" != "$VERSION" ]]; then
+    "$DIR/build-hid.sh" >&2 || true
+  fi
+fi
 exec "$DIR/bin/iphone-core" "$@"

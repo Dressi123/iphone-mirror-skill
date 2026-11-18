@@ -35,6 +35,30 @@ shows it, so `state` is not a guard (`connect` presses Device Hub's View Screen)
 drive it.** `home` presses Device Hub's own Home button through Accessibility; `switcher`
 and `spotlight` have no Device Hub equivalent.
 
+## Device mode: no window, no pointer
+
+`IPHONE_APP=device` drives the phone with nothing on the Mac: `shot`, `text`, `tap-text` and
+`wait-text` read the device's own screenshots (scaled to points, so a pixel in a shot is
+still the point to tap), and `tap`, `double-tap`, `drag`, `swipe`, `scroll`, `pinch`, `back`
+and `home` go through CoreDevice's remote digitizer, the service Device Hub turns clicks
+into. The user's mouse, keyboard and focus stay theirs. It adds what a pointer can't do:
+
+```
+iphone pinch 196 300 40 300 [--ms 400]   # two fingers, gap 40 pt → 300 pt (zoom in)
+iphone back                              # the real swipe in from the left edge
+iphone home                              # the swipe up from the bottom edge
+```
+
+- `bin/iphone-hid` does the touching. CoreDevice is private and ships no Swift interface:
+  `hid/CoreDevice.swiftmodule/` is a hand-written slice of it, and `build-hid.sh` builds the
+  helper only where the framework exists, again whenever its version changes. If an Xcode
+  update breaks it, the window modes still work.
+- Slower to look: a screenshot takes ~1.5 s, so an action settles on a fixed 700 ms wait
+  rather than watching for stillness. Pass `--wait MS` to change it.
+- No typing yet (`type`, `key`), and no `record`: use a window mode for those.
+- **Nothing shows the user what you are doing**, and the phone may be in their hand. Take a
+  `shot` first and drive only an idle phone, on the screens the task needs.
+
 ## Commands on the device itself
 
 These go through Xcode's `devicectl`, to the device rather than a window, so they work
@@ -106,7 +130,7 @@ It stops at the first failing step and names it. Lines are split like a shell, `
   tap the icon: `tap-text Settings --offset 0 -25`.
 - **Rows behind a floating bar.** Text OCR can read under a bottom search or tab bar is
   not tappable there. Scroll it up first.
-- **No back swipe, no pinch.** (Through Mirroring; Device Hub may differ.) Both work from a real trackpad but cannot be synthesized.
+- **No back swipe, no pinch** through a window (Mirroring or Device Hub). Device mode does both. Both work from a real trackpad but cannot be synthesized.
   A recording of real two-finger-back and pinch gestures, replayed event for event (scroll,
   gesture and click events, original timing), moved nothing. The likely reason: Mirroring reads these from
   the trackpad itself, not from the event stream, so posted events never reach them.

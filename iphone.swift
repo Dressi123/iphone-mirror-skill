@@ -39,6 +39,11 @@ let bundleID: String = {
 
 var isDeviceHub: Bool { bundleID == deviceHubID }
 
+/// `IPHONE_APP=device`: no window at all. Shots are the device's own screenshots, scaled to
+/// points, and touches go through CoreDevice's remote digitizer (`bin/iphone-hid`), so the
+/// Mac's pointer, keyboard and focus are never touched.
+let isDeviceMode = ProcessInfo.processInfo.environment["IPHONE_APP"] == "device"
+
 func mirrorApp() -> NSRunningApplication? {
     NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
 }
@@ -56,6 +61,7 @@ func mirrorPID() -> pid_t? {
 }
 
 func findWindow() -> MirrorWindow? {
+    if isDeviceMode { return MirrorWindow(id: 0, frame: CGRect(origin: .zero, size: deviceScreen.size)) }
     guard let pid = mirrorPID(),
           let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
     else { return nil }
@@ -76,6 +82,7 @@ func findWindow() -> MirrorWindow? {
 }
 
 func requireWindow() -> MirrorWindow {
+    if isDeviceMode { return findWindow()! }
     if mirrorApp() == nil, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
         NSWorkspace.shared.open(url)
         for _ in 0..<20 where findWindow() == nil { usleep(250_000) }
@@ -99,6 +106,15 @@ func captureRaw(_ window: MirrorWindow) -> CGImage {
     func load() -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: raw) as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+    if isDeviceMode {
+        // Decoded now, not lazily: the file is deleted on return, before anything draws it.
+        devicectl(["device", "capture", "screenshot", "--device", deviceID, "--destination", raw])
+        let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: raw) as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, options)
+        else { fail("the device's screenshot could not be read") }
+        return image
     }
     run("/usr/sbin/screencapture", ["-x", "-o", "-l", String(window.id), raw])
     if let image = load(), !isBlank(image) { return image }
@@ -317,6 +333,7 @@ func bringMirrorForward() {
 }
 
 func takeFocus() {
+    if isDeviceMode { return }
     let previous = NSWorkspace.shared.frontmostApplication
     let cursor = CGEvent(source: nil)?.location
     bringMirrorForward()
@@ -330,6 +347,7 @@ func takeFocus() {
 /// Runs `body` with iPhone Mirroring frontmost, then gives focus and the cursor back.
 /// Inside `run` focus stays put between steps, unless something else took it meanwhile.
 func withMirrorFocused(_ body: () -> Void) {
+    if isDeviceMode { body(); return }
     if focusHeld {
         if NSWorkspace.shared.frontmostApplication?.bundleIdentifier != bundleID { bringMirrorForward() }
         body()
@@ -356,6 +374,7 @@ func mouse(_ type: CGEventType, _ point: CGPoint, clicks: Int64 = 1) {
 
 /// A tap, or with `hold` a press held still that long: a context menu, a long press.
 func click(_ window: MirrorWindow, _ point: CGPoint, hold: UInt32 = 0) {
+    if isDeviceMode { return hid("tap", fractions(window, [point]) + [hold > 0 ? Double(hold) : 70]) }
     let p = global(window, point)
     withMirrorFocused {
         mouse(.mouseMoved, p); usleep(60_000)
@@ -365,6 +384,7 @@ func click(_ window: MirrorWindow, _ point: CGPoint, hold: UInt32 = 0) {
 }
 
 func doubleTap(_ window: MirrorWindow, _ point: CGPoint) {
+    if isDeviceMode { return hid("double-tap", fractions(window, [point])) }
     let p = global(window, point)
     withMirrorFocused {
         mouse(.mouseMoved, p); usleep(60_000)
@@ -377,6 +397,13 @@ func doubleTap(_ window: MirrorWindow, _ point: CGPoint) {
 /// iPhone Mirroring scrolls on wheel events, not drags. Negative `dy` scrolls down and
 /// negative `dx` scrolls right, toward what is off the right edge.
 func scroll(_ window: MirrorWindow, dy: Int32, dx: Int32, at point: CGPoint?) {
+    if isDeviceMode {
+        // No wheel on a phone: a finger moved the same way, kept on the screen.
+        let from = point ?? CGPoint(x: window.frame.width / 2, y: window.frame.height / 2)
+        let to = CGPoint(x: min(max(from.x + CGFloat(dx), 8), window.frame.width - 8),
+                         y: min(max(from.y + CGFloat(dy), 60), window.frame.height - 40))
+        return hid("move", fractions(window, [from, to]) + [300, 0, 150])
+    }
     let p = global(window, point ?? CGPoint(x: window.frame.width / 2, y: window.frame.height / 2))
     withMirrorFocused {
         mouse(.mouseMoved, p); usleep(60_000)
@@ -394,6 +421,7 @@ func scroll(_ window: MirrorWindow, dy: Int32, dx: Int32, at point: CGPoint?) {
 /// the row up after a long press, and an immediate drag reads as a tap or a scroll. The
 /// finger rests before lifting, so the release carries no velocity; `swipe` is the flick.
 func drag(_ window: MirrorWindow, from a: CGPoint, to b: CGPoint, hold: UInt32 = 0) {
+    if isDeviceMode { return hid("move", fractions(window, [a, b]) + [hold > 0 ? 900 : 400, Double(hold), 300]) }
     let start = global(window, a), end = global(window, b)
     let steps = hold > 0 ? 60 : 25
     withMirrorFocused {
@@ -414,6 +442,7 @@ func drag(_ window: MirrorWindow, from a: CGPoint, to b: CGPoint, hold: UInt32 =
 /// A flick: constant speed over `ms` and released while still moving, so the gesture ends
 /// with velocity — swipe to delete, page a carousel, throw a sheet away. Shorter is faster.
 func swipe(_ window: MirrorWindow, from a: CGPoint, to b: CGPoint, ms: Int) {
+    if isDeviceMode { return hid("move", fractions(window, [a, b]) + [Double(ms)]) }
     let start = global(window, a), end = global(window, b)
     let steps = max(6, ms / 8)
     withMirrorFocused {
@@ -544,7 +573,7 @@ func devicectl(_ arguments: [String], quiet: Bool = false) -> (status: Int32, ou
 /// The device to act on: `IPHONE_DEVICE` (any identifier devicectl takes), else the first
 /// connected physical iPhone, else a booted simulator.
 let deviceID: String = {
-    if let id = ProcessInfo.processInfo.environment["IPHONE_DEVICE"], !id.isEmpty { return id }
+    let wanted = ProcessInfo.processInfo.environment["IPHONE_DEVICE"].flatMap { $0.isEmpty ? nil : $0 }
     let json = NSTemporaryDirectory() + "iphone-devices-\(getpid()).json"
     defer { try? FileManager.default.removeItem(atPath: json) }
     devicectl(["list", "devices", "--quiet", "--json-output", json])
@@ -555,11 +584,20 @@ let deviceID: String = {
     func field(_ device: [String: Any], _ group: String, _ key: String) -> String? {
         (device[group] as? [String: Any])?[key] as? String
     }
+    // The CoreDevice identifier, which devicectl and the touch helper both take.
+    if let wanted {
+        let match = devices.first {
+            [$0["identifier"] as? String, field($0, "hardwareProperties", "udid"), field($0, "deviceProperties", "name")]
+                .contains { $0?.caseInsensitiveCompare(wanted) == .orderedSame }
+        }
+        guard let id = match?["identifier"] as? String else { fail("no device matches IPHONE_DEVICE=\(wanted)") }
+        return id
+    }
     let phones = devices.filter {
         field($0, "hardwareProperties", "platform") == "iOS" && field($0, "connectionProperties", "tunnelState") == "connected"
     }
     let pick = phones.first { field($0, "hardwareProperties", "reality") == "physical" } ?? phones.first
-    guard let pick, let id = field(pick, "hardwareProperties", "udid") ?? pick["identifier"] as? String else {
+    guard let pick, let id = pick["identifier"] as? String else {
         fail("no connected iPhone. Unlock it and check `xcrun devicectl list devices`, or set IPHONE_DEVICE.")
     }
     return id
@@ -599,6 +637,43 @@ func pressDeviceHubButton(_ name: String) -> Bool {
         }
     }
     return false
+}
+
+/// The device's screen in points, and its pixels per point, from devicectl.
+let deviceScreen: (size: CGSize, scale: CGFloat) = {
+    let output = devicectl(["device", "info", "displays", "--device", deviceID]).output
+    func value(_ key: String) -> String? {
+        output.split(separator: "\n").first { $0.contains(key) }.map { String($0.split(separator: ":", maxSplits: 1)[1]) }
+    }
+    let bounds = value("bounds")?.components(separatedBy: CharacterSet(charactersIn: "(), ")).compactMap(Double.init) ?? []
+    let scale = value("pointScale").flatMap { Double($0.trimmingCharacters(in: .whitespaces)) } ?? 3
+    guard bounds.count == 4 else { fail("could not read the device's screen size") }
+    return (CGSize(width: bounds[2] / scale, height: bounds[3] / scale), CGFloat(scale))
+}()
+
+/// Window points as fractions of the screen, flattened: what `iphone-hid` takes.
+func fractions(_ window: MirrorWindow, _ points: [CGPoint]) -> [Double] {
+    points.flatMap { [Double($0.x / window.frame.width), Double($0.y / window.frame.height)] }
+}
+
+/// Runs a gesture through `bin/iphone-hid`, beside this binary.
+func hid(_ verb: String, _ numbers: [Double], prefix: [String] = []) {
+    let helper = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        .deletingLastPathComponent().appendingPathComponent("iphone-hid").path
+    guard FileManager.default.isExecutableFile(atPath: helper) else {
+        fail("device mode needs bin/iphone-hid, which builds only where Xcode's CoreDevice framework exists")
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: helper)
+    process.arguments = [deviceID, verb] + prefix + numbers.map { String(format: "%.4f", $0) }
+    let pipe = Pipe()
+    process.standardError = pipe
+    do { try process.run() } catch { fail("could not run iphone-hid: \(error.localizedDescription)") }
+    process.waitUntilExit()
+    if process.terminationStatus != 0 {
+        fail(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 }
 
 // MARK: - Helpers
@@ -668,11 +743,14 @@ struct Settle {
     init(_ args: inout [String]) {
         wait = option("--wait", in: &args) ?? "stable"
         shot = option("--shot", in: &args)
-        before = wait == "stable" ? findWindow().map(fingerprint) : nil
+        // In device mode every frame is a ~1.5 s screenshot, too slow to watch for stillness.
+        before = wait == "stable" && !isDeviceMode ? findWindow().map(fingerprint) : nil
     }
 
     func finish() {
-        if wait == "stable" {
+        if wait == "stable", isDeviceMode {
+            usleep(700_000)
+        } else if wait == "stable" {
             if let window = findWindow(), let before {
                 // Mirroring shows the phone a few hundred ms late, and a still screen read
                 // before the change arrives would pass for a settled one.
@@ -741,7 +819,8 @@ usage: iphone <command>   (coordinates are window points; a shot's pixels are po
   drag X1 Y1 X2 Y2 [--hold MS]   slow press-drag that rests before lifting (sliders,
                                  sheets; --hold 600 long-presses first, to reorder rows)
   swipe X1 Y1 X2 Y2 [--ms MS]    flick released while moving (default 150 ms; shorter is faster)
-  back                           tap the top-left back button
+  back                           tap the top-left back button (device mode: the edge swipe)
+  pinch X Y FROM TO [--ms MS]    two fingers, FROM/TO the gap in points (device mode only)
   type TEXT                      type into the focused field ("\\n" presses return)
   key NAME [--cmd] [--shift] [--alt]   return tab space delete escape forward-delete
                                  left right up down, or a single character
@@ -765,7 +844,7 @@ Any action also takes --wait (default: until the screen has changed and settled,
 
 // MARK: - Commands
 
-let actions: Set<String> = ["tap", "tap-text", "double-tap", "scroll", "drag", "swipe", "back", "type", "key", "home", "switcher", "spotlight"]
+let actions: Set<String> = ["pinch", "tap", "tap-text", "double-tap", "scroll", "drag", "swipe", "back", "type", "key", "home", "switcher", "spotlight"]
 
 func execute(_ command: String, _ arguments: [String]) {
     var args = arguments
@@ -805,6 +884,10 @@ func execute(_ command: String, _ arguments: [String]) {
                 print("\(Int(line.center.x)) \(Int(line.center.y)) \(Int(line.rect.width)) \(Int(line.rect.height))\t\(line.text)")
             }
         }
+
+    case "state" where isDeviceMode, "connect" where isDeviceMode:
+        hid("check", [])
+        print("connected")
 
     case "state":
         // A single read can land on a frame with no text (a dark screen, a frame mid-update),
@@ -928,6 +1011,23 @@ func execute(_ command: String, _ arguments: [String]) {
         swipe(requireWindow(), from: a, to: b, ms: ms)
         settle?.finish()
 
+    case "pinch":
+        // Two fingers: device mode only, since a pointer is one finger.
+        guard isDeviceMode else { fail("pinch needs IPHONE_APP=device") }
+        let ms = option("--ms", in: &args).flatMap(Double.init) ?? 400
+        guard args.count >= 4 else { fail("pinch needs X Y FROM TO (finger gap in points)") }
+        let window = requireWindow()
+        let c = fractions(window, [CGPoint(x: number(args[0]), y: number(args[1]))])
+        let half = { (gap: CGFloat) in Double(gap / 2 / window.frame.width) }
+        hid("pinch", c + [half(number(args[2])), half(number(args[3])), ms])
+        args.removeFirst(4)
+        settle?.finish()
+
+    case "back" where isDeviceMode:
+        // The real back gesture, a swipe in from the left edge, which Mirroring never passed on.
+        hid("edge", [0.0, 0.5, 0.7, 0.5, 250], prefix: ["left"])
+        settle?.finish()
+
     case "back":
         // The back button, where a 398×874 window puts it. The back swipe would be the more
         // natural gesture, but no drag, flick or sideways wheel reaches it through Mirroring.
@@ -960,6 +1060,14 @@ func execute(_ command: String, _ arguments: [String]) {
         _ = requireWindow()
         withMirrorFocused { press(code, flags: flags) }
         settle?.finish()
+
+    case "home" where isDeviceMode:
+        hid("edge", [0.5, 0.995, 0.5, 0.6, 250], prefix: ["bottom"])
+        settle?.finish()
+
+    case "switcher" where isDeviceMode, "spotlight" where isDeviceMode, "type" where isDeviceMode,
+         "key" where isDeviceMode, "record" where isDeviceMode:
+        fail("\(command) needs a window: use IPHONE_APP=devicehub (or iPhone Mirroring)")
 
     case "home" where isDeviceHub:
         _ = requireWindow()
