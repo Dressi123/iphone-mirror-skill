@@ -21,6 +21,10 @@ struct MirrorWindow {
     let frame: CGRect   // global screen points, top-left origin (same space as CGEvent)
 }
 
+/// Xcode's Device Hub. Declared before `bundleID`: top-level globals here initialise in
+/// file order, and one read before its line is still empty.
+let deviceHubID = "com.apple.dt.Devices"
+
 /// iPhone Mirroring, or another app whose window shows a phone: `IPHONE_APP=devicehub`
 /// drives Xcode's Device Hub (a real iPhone or a simulator), `IPHONE_APP=simulator` the
 /// iOS Simulator app, and any bundle id names an app directly.
@@ -33,7 +37,6 @@ let bundleID: String = {
     }
 }()
 
-let deviceHubID = "com.apple.dt.Devices"
 var isDeviceHub: Bool { bundleID == deviceHubID }
 
 func mirrorApp() -> NSRunningApplication? {
@@ -571,16 +574,17 @@ func deviceCommand(_ subcommand: [String], _ extra: [String] = [], echo: Bool = 
     }
 }
 
-/// Presses one of Device Hub's own window buttons (Home, Screenshot, Rotate Left) through
+/// Presses one of Device Hub's own window buttons (View Screen, Home, Rotate Left) through
 /// Accessibility: no pointer, no focus change.
 func pressDeviceHubButton(_ name: String) -> Bool {
     guard let pid = mirrorPID() else { return false }
     func search(_ element: AXUIElement, depth: Int) -> AXUIElement? {
         guard depth < 6 else { return nil }
-        var role: CFTypeRef?, description: CFTypeRef?, children: CFTypeRef?
+        var role: CFTypeRef?, description: CFTypeRef?, title: CFTypeRef?, children: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &description)
-        if role as? String == kAXButtonRole, description as? String == name { return element }
+        AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
+        if role as? String == kAXButtonRole, description as? String == name || title as? String == name { return element }
         AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
         for child in (children as? [AXUIElement]) ?? [] {
             if let found = search(child, depth: depth + 1) { return found }
@@ -745,7 +749,7 @@ usage: iphone <command>   (coordinates are window points; a shot's pixels are po
   record PATH [--seconds S]      record the window to a .mov (default 10 s, clicks shown)
   screenshot PATH.png            the device's own screenshot, at its native resolution (devicectl;
                                  no window needed, but pixels are device pixels, not tap points)
-  screen-record PATH.mp4 [--seconds S]   the device's own recording (default 10 s)
+  screen-record PATH.mp4 [--seconds S]   the device's own recording (default 10 s; simulators only)
   appearance [light|dark] [--text-size xl|axxxl|...] [--reduce-motion on|off] ...
                                  bare: print the current settings; otherwise any flag of
                                  `devicectl device settings appearance`
@@ -813,6 +817,15 @@ func execute(_ command: String, _ arguments: [String]) {
             if attempt < 2 { usleep(800_000) }
         }
         print(state.rawValue)
+
+    case "connect" where isDeviceHub:
+        // Device Hub opens on the device's page; View Screen turns the window into the phone.
+        _ = requireWindow()
+        if pressDeviceHubButton("View Screen") {
+            for _ in 0..<20 where (findWindow()?.frame.height ?? 0) < 700 { usleep(250_000) }
+            usleep(1_500_000)
+        }
+        print("connected")
 
     case "connect":
         let window = requireWindow()
@@ -979,7 +992,12 @@ func execute(_ command: String, _ arguments: [String]) {
     case "screen-record":
         let seconds = option("--seconds", in: &args) ?? "10"
         guard let path = args.first, path.hasSuffix(".mp4") else { fail("screen-record needs a PATH ending .mp4") }
-        deviceCommand(["capture", "screen-record"], ["--destination", path, "--duration", seconds], echo: false)
+        let result = devicectl(["device", "capture", "screen-record", "--device", deviceID, "--destination", path, "--duration", seconds], quiet: true)
+        if result.status != 0 {
+            fail(result.output.contains("not supported")
+                 ? "this device can't record its own screen (simulators can, phones can't); use `record PATH.mov` on the window"
+                 : "devicectl failed:\n" + result.output)
+        }
         print(path)
 
     case "appearance":

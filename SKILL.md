@@ -31,7 +31,7 @@ app under test.
 Xcode's Device Hub (`DeviceHub.app`, inside Xcode) shows a connected iPhone's screen, or a
 simulator's, in a window that takes clicks as touches. `IPHONE_APP=devicehub` points every
 window command at it. Unlike Mirroring, the phone stays usable in your hand while Device Hub
-shows it, so `state` is not a guard: **check that the user isn't using the phone before you
+shows it, so `state` is not a guard (`connect` presses Device Hub's View Screen): **check that the user isn't using the phone before you
 drive it.** `home` presses Device Hub's own Home button through Accessibility; `switcher`
 and `spotlight` have no Device Hub equivalent.
 
@@ -43,7 +43,7 @@ set, else the first connected physical iPhone, else a booted simulator.
 
 ```
 iphone screenshot PATH.png               # native resolution; pixels are device pixels, not tap points
-iphone screen-record PATH.mp4 [--seconds 10]
+iphone screen-record PATH.mp4 [--seconds 10]   # simulators only; on a phone, `record` the window
 iphone appearance                        # print light/dark, text size, reduce motion, ...
 iphone appearance dark                   # or light; plus any `devicectl device settings appearance` flag:
 iphone appearance --text-size axxxl --larger-accessibility-sizes on
