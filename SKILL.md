@@ -1,6 +1,6 @@
 ---
 name: iphone-mirror
-description: See and drive the user's real iPhone through the macOS iPhone Mirroring window — screenshots, OCR of what's on screen, tap by label or point, long press, swipe, scroll, type, record — plus the devicectl commands to install, launch and read logs from a dev build. Use when asked to look at, tap through, or test something on the iPhone, or to check an app change on the device by hand.
+description: See and drive the user's real iPhone, through the iPhone Mirroring window, Xcode's Device Hub, or with no window at all (device mode, which touches through Xcode's private CoreDevice service and leaves the Mac's mouse alone). Screenshots, OCR of what's on screen, tap by label or point, long press, swipe, scroll, pinch, edge swipes, type, record; light/dark, text size, orientation and location through devicectl; plus the devicectl commands to install, launch and read logs from a dev build. Use when asked to look at, tap through, or test something on the iPhone, or to check an app change on the device by hand.
 ---
 
 # iphone-mirror
