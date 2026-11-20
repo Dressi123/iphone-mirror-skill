@@ -1,5 +1,6 @@
-// iphone-hid — touches on a device through Xcode's CoreDevice remote digitizer: the same
-// service Device Hub turns clicks into, called directly, so nothing on the Mac moves.
+// iphone-hid — touches and key presses on a device through Xcode's CoreDevice remote digitizer
+// and keyboard: the services Device Hub turns clicks and keys into, called directly, so
+// nothing on the Mac moves.
 //
 // CoreDevice is private and ships no Swift interface; `CoreDevice.swiftmodule/` beside this
 // file is a hand-written slice of it, enough to reach the digitizer. `build.sh` builds this
@@ -13,6 +14,8 @@
 //   pinch CX CY FROM TO MS                     two fingers, FROM/TO half the gap, as fractions of the width
 //   edge left|right|top|bottom X1 Y1 X2 Y2 MS  a swipe in from that edge
 //   check                                      exits 0 when the device's digitizer is reachable
+//   type TEXT                                  types TEXT as US-layout key presses; \n is Return
+//   key NAME [cmd] [shift] [alt] [ctrl]        one key (a character or a name in `namedKeys`), with modifiers
 
 import CoreDevice
 import Foundation
@@ -30,6 +33,37 @@ func fail(_ message: String) -> Never {
 }
 
 func sleep(ms: Double) async { try? await Task.sleep(for: .milliseconds(Int(ms))) }
+
+// MARK: - Keyboard
+
+/// HID usage codes (page 7). The phone reads them through its own hardware keyboard layout,
+/// so this is the US layout regardless of the Mac's.
+let modifierKeys: [String: UInt16] = ["ctrl": 0xE0, "shift": 0xE1, "alt": 0xE2, "cmd": 0xE3]
+let namedKeys: [String: UInt16] = [
+    "return": 0x28, "escape": 0x29, "delete": 0x2A, "tab": 0x2B, "space": 0x2C, "forward-delete": 0x4C,
+    "right": 0x4F, "left": 0x50, "down": 0x51, "up": 0x52,
+]
+/// Character → usage and whether Shift is held.
+let characterKeys: [Character: (usage: UInt16, shift: Bool)] = {
+    var map: [Character: (usage: UInt16, shift: Bool)] = ["\n": (0x28, false), "\t": (0x2B, false), " ": (0x2C, false)]
+    for (i, c) in "abcdefghijklmnopqrstuvwxyz".enumerated() {
+        map[c] = (0x04 + UInt16(i), false)
+        map[Character(c.uppercased())] = (0x04 + UInt16(i), true)
+    }
+    for (i, (plain, shifted)) in zip("1234567890", "!@#$%^&*()").enumerated() {
+        map[plain] = (0x1E + UInt16(i), false)
+        map[shifted] = (0x1E + UInt16(i), true)
+    }
+    let pairs: [(UInt16, Character, Character)] = [
+        (0x2D, "-", "_"), (0x2E, "=", "+"), (0x2F, "[", "{"), (0x30, "]", "}"), (0x31, "\\", "|"),
+        (0x33, ";", ":"), (0x34, "'", "\""), (0x35, "`", "~"), (0x36, ",", "<"), (0x37, ".", ">"), (0x38, "/", "?"),
+    ]
+    for (usage, plain, shifted) in pairs {
+        map[plain] = (usage, false)
+        map[shifted] = (usage, true)
+    }
+    return map
+}()
 
 @main struct HID {
     static func main() async {
@@ -52,6 +86,58 @@ func sleep(ms: Double) async { try? await Task.sleep(for: .milliseconds(Int(ms))
             await sleep(ms: 50)
         }
         guard let device else { fail("device \(id) not found; is it connected and unlocked?") }
+
+        if verb == "type" || verb == "key" {
+            let keyboard: any HIDKeyboard
+            do {
+                guard let found = try await implementation(device, CapabilityStaticMember<KeyboardHIDCapability>()) as? any HIDKeyboard
+                else { fail("the device has no keyboard") }
+                keyboard = found
+            } catch {
+                fail("no keyboard: \(error)")
+            }
+            func send(_ usage: UInt16, _ state: HIDButtonState) async {
+                do { try keyboard.send(key: HIDKeyboardUsageCode(rawValue: usage), state: state) }
+                catch { fail("key failed: \(error)") }
+                await sleep(ms: 25)
+            }
+            /// Modifiers go down first and up last, as a hand presses a shortcut.
+            func press(_ usage: UInt16, _ modifiers: [UInt16]) async {
+                for m in modifiers { await send(m, .down) }
+                await send(usage, .down)
+                await send(usage, .up)
+                for m in modifiers.reversed() { await send(m, .up) }
+            }
+            guard let text = args.first else { fail("\(verb) needs an argument") }
+            if verb == "type" {
+                var skipped = ""
+                for character in text {
+                    guard let key = characterKeys[character] else { skipped.append(character); continue }
+                    await press(key.usage, key.shift ? [modifierKeys["shift"]!] : [])
+                }
+                if !skipped.isEmpty {
+                    FileHandle.standardError.write(Data("iphone: no key types \(skipped.debugDescription) on a US layout; skipped\n".utf8))
+                }
+            } else {
+                var modifiers = args.dropFirst().map { name -> UInt16 in
+                    guard let usage = modifierKeys[name] else { fail("unknown modifier \(name)") }
+                    return usage
+                }
+                let usage: UInt16
+                if let named = namedKeys[text] {
+                    usage = named
+                } else if text.count == 1, let key = characterKeys[text.first!] {
+                    usage = key.usage
+                    if key.shift, !modifiers.contains(0xE1) { modifiers.append(0xE1) }
+                } else {
+                    fail("unknown key \(text)")
+                }
+                await press(usage, modifiers)
+            }
+            keyboard.sendBarrier()
+            return
+        }
+
         let digitizer: any HIDDigitizer
         do {
             guard let found = try await implementation(device, CapabilityStaticMember<DigitizerHIDCapability>()) as? any HIDDigitizer

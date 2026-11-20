@@ -76,7 +76,7 @@ Accessibility permission is needed, since nothing on the Mac is captured or clic
 
 **How it works.** Xcode's Device Hub shows a connected phone and turns your clicks into
 touches through a service in Xcode's private `CoreDevice` framework, a remote digitizer
-that takes one or two touch points and an edge. The skill calls that service directly from
+that takes one or two touch points and an edge, and a remote keyboard beside it. The skill calls that service directly from
 a small helper, `bin/iphone-hid`. Screenshots come from `devicectl`, Xcode's supported
 command-line tool for devices.
 
@@ -97,7 +97,8 @@ Xcode 27 (CoreDevice 642.16). So:
   your hand. The skill tells Claude to check the phone is idle first.
 
 It is also slower to look (about 1.5 s per screenshot, so actions settle on a fixed wait),
-and it can't type or record yet: use a window mode for those.
+and it can't record yet: use a window mode for that. It types as a US hardware keyboard,
+so symbols come out right only if the phone's hardware keyboard layout is US.
 
 ## Using it
 
@@ -122,7 +123,7 @@ You can also run the CLI yourself. `iphone` with no arguments lists every comman
 | Tap, long press, double-tap, swipe, drag, scroll | yes | yes |
 | Pinch, two fingers | no | yes |
 | Edge back swipe | no (`back` taps the button) | yes |
-| Type and press keys | yes | not yet |
+| Type and press keys | yes | yes (US layout) |
 | OCR, screenshots, coordinate grid | yes | yes |
 | Record video | yes | no |
 | Light/dark, text size, orientation, location (`appearance`, `orientation`, `location`) | yes, through `devicectl` | yes |

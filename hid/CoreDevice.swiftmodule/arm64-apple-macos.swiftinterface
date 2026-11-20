@@ -63,3 +63,24 @@ public class DeviceManager {
   public static var shared: CoreDevice.DeviceManager { get }
   final public func allDevices() -> [CoreDevice.RemoteDevice]
 }
+
+// The keyboard: HID usage codes from page 7, pressed and released one at a time. The two
+// value types are defined in CoreDeviceUtilities but carry CoreDevice's module name.
+public struct KeyboardHIDCapability : CoreDevice.DeviceCapability {
+  public typealias ProtocolType = Any
+  public typealias ImplType = Any
+}
+
+public struct HIDKeyboardUsageCode {
+  public init(rawValue: Swift.UInt16)
+}
+
+public enum HIDButtonState {
+  case down
+  case up
+}
+
+public protocol HIDKeyboard : CoreDevice.DeviceCapabilityProtocol {
+  func send(key: CoreDevice.HIDKeyboardUsageCode, state: CoreDevice.HIDButtonState) throws
+  func sendBarrier()
+}

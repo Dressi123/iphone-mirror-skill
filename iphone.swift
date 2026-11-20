@@ -670,10 +670,11 @@ func hid(_ verb: String, _ numbers: [Double], prefix: [String] = []) {
     process.standardError = pipe
     do { try process.run() } catch { fail("could not run iphone-hid: \(error.localizedDescription)") }
     process.waitUntilExit()
-    if process.terminationStatus != 0 {
-        fail(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines))
-    }
+    let message = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if process.terminationStatus != 0 { fail(message) }
+    // A warning, such as characters `type` had no key for.
+    if !message.isEmpty { FileHandle.standardError.write(Data((message + "\n").utf8)) }
 }
 
 // MARK: - Helpers
@@ -1035,6 +1036,20 @@ func execute(_ command: String, _ arguments: [String]) {
         click(window, CGPoint(x: window.frame.width * 45 / 398, y: window.frame.height * 119 / 874))
         settle?.finish()
 
+    // Ahead of the window cases: those would post the keys into whatever Mac app is in front.
+    case "type" where isDeviceMode:
+        guard let text = args.first else { fail("type needs TEXT") }
+        args.removeFirst()
+        hid("type", [], prefix: [text.replacingOccurrences(of: "\\n", with: "\n")])
+        settle?.finish()
+
+    case "key" where isDeviceMode:
+        let modifiers = ["cmd", "shift", "alt", "ctrl"].filter { flag("--\($0)", in: &args) }
+        guard let name = args.first else { fail("key needs a NAME") }
+        args.removeFirst()
+        hid("key", [], prefix: [name] + modifiers)
+        settle?.finish()
+
     case "type":
         guard let text = args.first else { fail("type needs TEXT") }
         args.removeFirst()
@@ -1065,8 +1080,7 @@ func execute(_ command: String, _ arguments: [String]) {
         hid("edge", [0.5, 0.995, 0.5, 0.6, 250], prefix: ["bottom"])
         settle?.finish()
 
-    case "switcher" where isDeviceMode, "spotlight" where isDeviceMode, "type" where isDeviceMode,
-         "key" where isDeviceMode, "record" where isDeviceMode:
+    case "switcher" where isDeviceMode, "spotlight" where isDeviceMode, "record" where isDeviceMode:
         fail("\(command) needs a window: use IPHONE_APP=devicehub (or iPhone Mirroring)")
 
     case "home" where isDeviceHub:

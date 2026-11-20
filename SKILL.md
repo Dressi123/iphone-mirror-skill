@@ -41,7 +41,8 @@ and `spotlight` have no Device Hub equivalent.
 `wait-text` read the device's own screenshots (scaled to points, so a pixel in a shot is
 still the point to tap), and `tap`, `double-tap`, `drag`, `swipe`, `scroll`, `pinch`, `back`
 and `home` go through CoreDevice's remote digitizer, the service Device Hub turns clicks
-into. The user's mouse, keyboard and focus stay theirs. It adds what a pointer can't do:
+into, and `type` and `key` through its remote keyboard. The user's mouse, keyboard and
+focus stay theirs. It adds what a pointer can't do:
 
 ```
 iphone pinch 196 300 40 300 [--ms 400]   # two fingers, gap 40 pt → 300 pt (zoom in)
@@ -55,7 +56,13 @@ iphone home                              # the swipe up from the bottom edge
   update breaks it, the window modes still work.
 - Slower to look: a screenshot takes ~1.5 s, so an action settles on a fixed 700 ms wait
   rather than watching for stillness. Pass `--wait MS` to change it.
-- No typing yet (`type`, `key`), and no `record`: use a window mode for those.
+- `type` and `key` go through CoreDevice's remote keyboard, as a hardware keyboard would:
+  `key space --cmd` opens Spotlight from anywhere. Keys are sent as a **US layout**, which
+  the phone reads through its own hardware keyboard layout (Settings > General > Keyboard >
+  Hardware Keyboard): letters and digits are safe on any Latin layout, symbols only on US.
+  A character with no US key (æ, é, emoji) is skipped with a warning. While it thinks a
+  keyboard is attached, iOS may hide the on-screen keyboard, so the layout of a shot changes.
+- No `record`: use a window mode for that.
 - **Nothing shows the user what you are doing**, and the phone may be in their hand. Take a
   `shot` first and drive only an idle phone, on the screens the task needs.
 
