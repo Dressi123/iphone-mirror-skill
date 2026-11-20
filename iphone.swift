@@ -372,9 +372,26 @@ func mouse(_ type: CGEventType, _ point: CGPoint, clicks: Int64 = 1) {
     event?.post(tap: .cghidEventTap)
 }
 
+/// `--check`: taps, compares the screen with the one before, and when nothing moved taps
+/// once more, held longer. Exits non-zero when that missed too, so a `run` script stops
+/// there instead of acting on the wrong screen. Costs two screenshots in device mode.
+func checkedClick(_ window: MirrorWindow, _ point: CGPoint, hold: UInt32) {
+    let before = fingerprint(window)
+    click(window, point, hold: hold)
+    usleep(700_000)
+    if changedCells(before, fingerprint(window)) > 0 { return }
+    warn("screen did not change; tapping again, held longer")
+    click(window, point, hold: max(hold, 400))
+    usleep(700_000)
+    if changedCells(before, fingerprint(window)) == 0 {
+        fail("tap at \(Int(point.x)) \(Int(point.y)) missed twice: the screen did not change")
+    }
+}
+
 /// A tap, or with `hold` a press held still that long: a context menu, a long press.
 func click(_ window: MirrorWindow, _ point: CGPoint, hold: UInt32 = 0) {
-    if isDeviceMode { return hid("tap", fractions(window, [point]) + [hold > 0 ? Double(hold) : 70]) }
+    // 250 ms by default: a 70 ms touch often missed the floating tab bar and toolbar buttons.
+    if isDeviceMode { return hid("tap", fractions(window, [point]) + [hold > 0 ? Double(hold) : 250]) }
     let p = global(window, point)
     withMirrorFocused {
         mouse(.mouseMoved, p); usleep(60_000)
@@ -748,8 +765,10 @@ struct Settle {
         before = wait == "stable" && !isDeviceMode ? findWindow().map(fingerprint) : nil
     }
 
-    func finish() {
-        if wait == "stable", isDeviceMode {
+    /// `afterCheck`: a checked tap has already waited for the screen to change.
+    func finish(afterCheck: Bool = false) {
+        if afterCheck {
+        } else if wait == "stable", isDeviceMode {
             usleep(700_000)
         } else if wait == "stable" {
             if let window = findWindow(), let before {
@@ -807,8 +826,10 @@ usage: iphone <command>   (coordinates are window points; a shot's pixels are po
   text [--json] [--region X Y W H]         OCR: "x y w h<TAB>text" per line
   state                          connected | in-use | connecting | disconnected | blank
   connect                        press Connect if mirroring has dropped, wait until live
-  tap X Y [--hold MS]            tap a point; --hold long-presses in place
-  tap-text LABEL [--nth N] [--regex] [--offset DX DY] [--hold MS] [--region X Y W H]
+  tap X Y [--hold MS] [--check]  tap a point; --hold long-presses in place; --check taps
+                                 again, held longer, if the screen didn't change, and
+                                 fails if it still didn't
+  tap-text LABEL [--nth N] [--regex] [--offset DX DY] [--hold MS] [--region X Y W H] [--check]
                                  tap the Nth (default 1) match; case and spaces ignored;
                                  --offset taps beside it, for an icon next to a label
   double-tap X Y                 double-tap (zoom a photo or the map)
@@ -931,10 +952,11 @@ func execute(_ command: String, _ arguments: [String]) {
     case "tap":
         let hold = option("--hold", in: &args).map { UInt32(number($0)) } ?? 0
         guard args.count >= 2 else { fail("tap needs X Y") }
+        let check = flag("--check", in: &args)
         let point = CGPoint(x: number(args[0]), y: number(args[1]))
         args.removeFirst(2)
-        click(requireWindow(), point, hold: hold)
-        settle?.finish()
+        if check { checkedClick(requireWindow(), point, hold: hold); settle?.finish(afterCheck: true) }
+        else { click(requireWindow(), point, hold: hold); settle?.finish() }
 
     case "tap-text":
         let nth = option("--nth", in: &args).flatMap(Int.init) ?? 1
@@ -942,6 +964,7 @@ func execute(_ command: String, _ arguments: [String]) {
         let offset = numbers("--offset", 2, in: &args) ?? [0, 0]
         let hold = option("--hold", in: &args).map { UInt32(number($0)) } ?? 0
         let area = region(in: &args)
+        let check = flag("--check", in: &args)
         guard let label = args.first else { fail("tap-text needs a LABEL") }
         args.removeFirst()
         let window = requireWindow()
@@ -951,9 +974,9 @@ func execute(_ command: String, _ arguments: [String]) {
         }
         let target = matches[nth - 1]
         let point = CGPoint(x: target.center.x + offset[0], y: target.center.y + offset[1])
-        click(window, point, hold: hold)
-        warn("tapped \"\(target.text)\" at \(Int(point.x)) \(Int(point.y))")
-        settle?.finish()
+        warn("tapping \"\(target.text)\" at \(Int(point.x)) \(Int(point.y))")
+        if check { checkedClick(window, point, hold: hold); settle?.finish(afterCheck: true) }
+        else { click(window, point, hold: hold); settle?.finish() }
 
     case "double-tap":
         guard args.count >= 2 else { fail("double-tap needs X Y") }

@@ -56,6 +56,13 @@ iphone home                              # the swipe up from the bottom edge
   update breaks it, the window modes still work.
 - Slower to look: a screenshot takes ~1.5 s, so an action settles on a fixed 700 ms wait
   rather than watching for stillness. Pass `--wait MS` to change it.
+- A touch lasts 250 ms: at 70 ms the floating tab bar and toolbar buttons often missed it.
+- `tap` and `tap-text` take `--check`: compare the screen before and after, tap once more
+  held longer if nothing moved, and exit non-zero if it still didn't. Use it for taps a
+  sequence depends on (a tab, a button that opens a screen), so one `run` script can chain
+  a whole flow and stop at the first miss instead of acting on the wrong screen. It costs
+  two screenshots (~3 s); a tap that changes almost nothing (a small toggle in a corner)
+  may read as a miss.
 - `type` and `key` go through CoreDevice's remote keyboard, as a hardware keyboard would:
   `key space --cmd` opens Spotlight from anywhere. Keys are sent as a **US layout**, which
   the phone reads through its own hardware keyboard layout (Settings > General > Keyboard >
@@ -97,7 +104,7 @@ iphone text [--json] [--region X Y W H]  # OCR: "x y w h<TAB>text" (cheap, prefe
 iphone shot PATH [--grid]                # look; --grid numbers the coordinates
 iphone shot PATH --crop X Y W H          # one area at full Retina resolution
 
-iphone tap X Y [--hold MS]               # --hold 900: long press (context menus)
+iphone tap X Y [--hold MS] [--check]     # --hold 900: long press (context menus)
 iphone tap-text "Save" [--nth 2] [--regex] [--offset DX DY] [--hold MS] [--region X Y W H]
 iphone double-tap X Y
 iphone swipe X1 Y1 X2 Y2 [--ms 150]      # flick, released moving: pages, swipe actions
